@@ -1,0 +1,59 @@
+name: deploy
+
+# Reference pipeline, NEVER RUN against a real Azure subscription (there is none behind this repository).
+# Both jobs are skipped unless the repository variable named in each `if` is set.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # Pull requests get the read-only application.
+    if: github.event_name == 'pull_request' && vars.AZURE_PLAN_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # lets this job request a GitHub OIDC token; nothing else gets it
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Show what is deployed now
+        env:
+          APP: ${{ vars.CONTAINER_APP }}
+          GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: az containerapp show --name "$APP" --resource-group "$GROUP" --query properties.latestRevisionName -o tsv
+
+  deploy:
+    # Only a push to main, and only through the protected environment. The deploy application's credential
+    # accepts exactly one subject: this repository's `production` environment.
+    if: github.event_name == 'push' && vars.AZURE_DEPLOY_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy
+        env:
+          APP: ${{ vars.CONTAINER_APP }}
+          GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          IMAGE: ${{ vars.CONTAINER_IMAGE }}
+        run: az containerapp update --name "$APP" --resource-group "$GROUP" --image "$IMAGE"
